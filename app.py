@@ -40,6 +40,10 @@ st.markdown("""
         box-shadow: 0 4px 8px rgba(0,0,0,0.1);
         margin-bottom: 20px;
     }
+    /* Make sure the plot maintains aspect ratio */
+    [data-testid="stHorizontalBlock"] {
+        align-items: center;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -188,8 +192,9 @@ time_to_color = {
 }
 df['color'] = df['time'].map(time_to_color)
 
-# Map customer desirability to marker edge width
-desirability_to_width = {'LOW': 1, 'MEDIUM': 2, 'HIGH': 3}
+# Map customer desirability to marker edge width using log scale for better visibility
+# Using logarithmic scale to amplify differences
+desirability_to_width = {'LOW': 1, 'MEDIUM': 3, 'HIGH': 9}
 df['line_width'] = df['desirability'].map(desirability_to_width)
 
 # Define the categories and their angles (half circle - 180 degrees)
@@ -222,9 +227,60 @@ if 'last_hover_time' not in st.session_state:
 if 'last_hover_tech' not in st.session_state:
     st.session_state.last_hover_tech = None
 
-# Create the interactive radar plot
-def create_radar_plot():
-    # Create figure
+# Add sidebar with filters
+st.sidebar.title("Filters")
+
+# Category filter
+selected_categories = st.sidebar.multiselect(
+    "Select Categories",
+    options=categories,
+    default=categories
+)
+
+# TRL filter
+trl_range = st.sidebar.slider(
+    "TRL Range",
+    min_value=1,
+    max_value=9,
+    value=(1, 9)
+)
+
+# Business Potential filter
+business_options = ['LOW', 'MEDIUM', 'HIGH']
+selected_business = st.sidebar.multiselect(
+    "Business Potential",
+    options=business_options,
+    default=business_options
+)
+
+# Time to Market filter
+time_options = ['NOW', '1', '3', '5', '10', 'NEVER']
+selected_time = st.sidebar.multiselect(
+    "Time to Market",
+    options=time_options,
+    default=time_options
+)
+
+# Customer Desirability filter
+desirability_options = ['LOW', 'MEDIUM', 'HIGH']
+selected_desirability = st.sidebar.multiselect(
+    "Customer Desirability",
+    options=desirability_options,
+    default=desirability_options
+)
+
+# Apply filters to create filtered dataframe
+filtered_df = df[
+    df['category'].isin(selected_categories) &
+    (df['trl'] >= trl_range[0]) & (df['trl'] <= trl_range[1]) &
+    df['business'].isin(selected_business) &
+    df['time'].isin(selected_time) &
+    df['desirability'].isin(selected_desirability)
+]
+
+# Create the interactive radar plot with filtered data
+def create_radar_plot(filtered_data):
+    # Create figure with fixed aspect ratio
     fig = go.Figure()
     
     # Add rings for TRL levels
@@ -275,15 +331,16 @@ def create_radar_plot():
             opacity=0.8
         )
     
-    # Add technology points
-    for i, row in df.iterrows():
+    # Add technology points from filtered data
+    for i, row in filtered_data.iterrows():
         fig.add_trace(go.Scatter(
             x=[row['x']], y=[row['y']],
             mode='markers',
             marker=dict(
                 size=row['size'],
                 color=row['color'],
-                line=dict(width=row['line_width'], color='black')
+                line=dict(width=row['line_width'], color='black'),
+                opacity=0.5  # Semi-transparent bubbles for better visibility when overlapping
             ),
             name=row['name'],
             text=row['name'],
@@ -297,7 +354,7 @@ def create_radar_plot():
             customdata=[i]  # Store the index for hover callback
         ))
     
-    # Update layout
+    # Update layout with fixed aspect ratio to maintain semicircle shape
     fig.update_layout(
         showlegend=False,
         margin=dict(l=20, r=20, t=60, b=20),
@@ -312,7 +369,9 @@ def create_radar_plot():
             range=[-1.2, 1.2],
             showgrid=False,
             zeroline=False,
-            showticklabels=False
+            showticklabels=False,
+            scaleanchor="y",  # This ensures the aspect ratio is maintained
+            scaleratio=1      # Equal scaling for x and y axes
         ),
         yaxis=dict(
             range=[0, 1.2],
@@ -321,11 +380,12 @@ def create_radar_plot():
             showticklabels=False
         ),
         height=700,
-        hovermode='closest'
+        hovermode='closest',
+        autosize=True
     )
     
-    # Add legends
-    # Time to Market legend
+    # Add legends positioned to avoid overlap with the radar plot
+    # Time to Market legend - positioned on the right side
     time_items = [
         dict(name='NOW', color='#00441b'),
         dict(name='1 Year', color='#2c7fb8'),
@@ -334,11 +394,15 @@ def create_radar_plot():
         dict(name='10 Years', color='#d7301f')
     ]
     
+    # Position legends outside the plot area
+    legend_x_right = 1.3
+    legend_x_left = -1.3
+    
     for i, item in enumerate(time_items):
         fig.add_trace(go.Scatter(
-            x=[1.3], y=[1.1 - i*0.1],
+            x=[legend_x_right], y=[0.9 - i*0.1],
             mode='markers',
-            marker=dict(size=15, color=item['color']),
+            marker=dict(size=15, color=item['color'], opacity=0.5),
             name=item['name'],
             showlegend=True,
             hoverinfo='skip'
@@ -346,14 +410,14 @@ def create_radar_plot():
     
     # Add annotations for legends
     fig.add_annotation(
-        x=1.3, y=1.2,
+        x=legend_x_right, y=1.0,
         text="Time to Market",
         showarrow=False,
         font=dict(size=14, color='black', family='Arial, sans-serif'),
         xanchor='center'
     )
     
-    # Business Potential legend
+    # Business Potential legend - positioned on the left side
     business_items = [
         dict(name='LOW', size=20),
         dict(name='MEDIUM', size=40),
@@ -362,17 +426,47 @@ def create_radar_plot():
     
     for i, item in enumerate(business_items):
         fig.add_trace(go.Scatter(
-            x=[-1.3], y=[1.1 - i*0.1],
+            x=[legend_x_left], y=[0.9 - i*0.1],
             mode='markers',
-            marker=dict(size=item['size']/2, color='gray'),
+            marker=dict(size=item['size']/2, color='gray', opacity=0.5),
             name=item['name'],
             showlegend=True,
             hoverinfo='skip'
         ))
     
     fig.add_annotation(
-        x=-1.3, y=1.2,
+        x=legend_x_left, y=1.0,
         text="Business Potential",
+        showarrow=False,
+        font=dict(size=14, color='black', family='Arial, sans-serif'),
+        xanchor='center'
+    )
+    
+    # Customer Desirability legend - positioned at the bottom
+    desirability_items = [
+        dict(name='LOW', width=1),
+        dict(name='MEDIUM', width=3),
+        dict(name='HIGH', width=9)
+    ]
+    
+    for i, item in enumerate(desirability_items):
+        fig.add_trace(go.Scatter(
+            x=[-0.4 + i*0.4], y=[0.1],
+            mode='markers',
+            marker=dict(
+                size=30, 
+                color='white', 
+                opacity=0.5,
+                line=dict(width=item['width'], color='black')
+            ),
+            name=item['name'],
+            showlegend=True,
+            hoverinfo='skip'
+        ))
+    
+    fig.add_annotation(
+        x=0, y=0.2,
+        text="Customer Desirability",
         showarrow=False,
         font=dict(size=14, color='black', family='Arial, sans-serif'),
         xanchor='center'
@@ -380,30 +474,14 @@ def create_radar_plot():
     
     return fig
 
-# Create the plot
-fig = create_radar_plot()
+# Create the plot with filtered data
+fig = create_radar_plot(filtered_df)
 
-# Add hover callback
-hover_data = st.empty()
-
-# Function to handle hover events
-def handle_hover_event(trace, points, state):
-    if points.point_inds:
-        point_index = points.point_inds[0]
-        tech_index = trace.customdata[point_index]
-        tech = df.iloc[tech_index]
-        
-        # Update session state
-        st.session_state.last_hover_tech = tech
-        st.session_state.last_hover_time = datetime.now()
-        
-        # Force a rerun to update the display
-        st.experimental_rerun()
-
-# Add the plot to the app with config for hover persistence
+# Display the plot with config for maintaining aspect ratio
 plot_config = {
     'displayModeBar': False,
-    'responsive': True
+    'responsive': True,
+    'staticPlot': False
 }
 
 # Display the plot
@@ -427,57 +505,6 @@ if st.session_state.last_hover_tech is not None and time_diff < 1.5:
             <p><strong>Description:</strong> {tech['description']}</p>
         </div>
         """, unsafe_allow_html=True)
-
-# Add sidebar with filters
-st.sidebar.title("Filters")
-
-# Category filter
-selected_categories = st.sidebar.multiselect(
-    "Select Categories",
-    options=categories,
-    default=categories
-)
-
-# TRL filter
-trl_range = st.sidebar.slider(
-    "TRL Range",
-    min_value=1,
-    max_value=9,
-    value=(1, 9)
-)
-
-# Business Potential filter
-business_options = ['LOW', 'MEDIUM', 'HIGH']
-selected_business = st.sidebar.multiselect(
-    "Business Potential",
-    options=business_options,
-    default=business_options
-)
-
-# Time to Market filter
-time_options = ['NOW', '1', '3', '5', '10', 'NEVER']
-selected_time = st.sidebar.multiselect(
-    "Time to Market",
-    options=time_options,
-    default=time_options
-)
-
-# Customer Desirability filter
-desirability_options = ['LOW', 'MEDIUM', 'HIGH']
-selected_desirability = st.sidebar.multiselect(
-    "Customer Desirability",
-    options=desirability_options,
-    default=desirability_options
-)
-
-# Apply filters
-filtered_df = df[
-    df['category'].isin(selected_categories) &
-    (df['trl'] >= trl_range[0]) & (df['trl'] <= trl_range[1]) &
-    df['business'].isin(selected_business) &
-    df['time'].isin(selected_time) &
-    df['desirability'].isin(selected_desirability)
-]
 
 # Display filtered technologies in a table
 st.sidebar.title("Filtered Technologies")
@@ -508,7 +535,7 @@ st.sidebar.info(
     - **Position**: Technology Readiness Level (TRL)
     - **Size**: Business Potential
     - **Color**: Time to Market
-    - **Border Width**: Customer Desirability
+    - **Border Width**: Customer Desirability (log scale)
     
     Created by Manus AI
     """
